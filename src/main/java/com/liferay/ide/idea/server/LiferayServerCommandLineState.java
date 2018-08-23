@@ -23,75 +23,149 @@ import com.intellij.execution.util.JavaParametersUtil;
 import com.intellij.util.PathsList;
 import org.jetbrains.annotations.NotNull;
 
+import com.liferay.ide.idea.server.portal.PortalBundle;
+import com.liferay.ide.idea.server.portal.PortalBundleFactory;
+import com.liferay.ide.idea.util.FileUtil;
+import com.liferay.ide.idea.util.PortalPropertiesConfiguration;
+import com.liferay.ide.idea.util.ServerUtil;
+
 import java.io.File;
-import java.io.FileFilter;
+import java.io.InputStream;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
+import java.util.stream.Stream;
+
+import org.apache.commons.io.FileUtils;
 
 /**
  * @author Terry Jia
+ * @author Simon Jiang
  */
 public class LiferayServerCommandLineState extends BaseJavaApplicationCommandLineState<LiferayServerConfiguration> {
 
 	public LiferayServerCommandLineState(
-		@NotNull LiferayServerConfiguration configuration, ExecutionEnvironment environment) {
+		ExecutionEnvironment executionEnvironment, @NotNull LiferayServerConfiguration liferayServerConfiguration) {
 
-		super(environment, configuration);
+		super(executionEnvironment, liferayServerConfiguration);
 	}
 
 	@Override
 	protected JavaParameters createJavaParameters() throws ExecutionException {
-		JavaParameters params = new JavaParameters();
+		JavaParameters javaParameters = new JavaParameters();
 
-		LiferayServerConfiguration configuration = getConfiguration();
+		LiferayServerConfiguration liferayServerConfiguration = getConfiguration();
 
-		String jreHome = configuration.isAlternativeJrePathEnabled() ? configuration.getAlternativeJrePath() : null;
+		String jrePath = null;
 
-		params.setJdk(JavaParametersUtil.createProjectJdk(configuration.getProject(), jreHome));
+		if (liferayServerConfiguration.isAlternativeJrePathEnabled()) {
+			jrePath = liferayServerConfiguration.getAlternativeJrePath();
+		}
 
-		File bundleDir = new File(configuration.getLiferayBundle());
+		javaParameters.setJdk(JavaParametersUtil.createProjectJdk(liferayServerConfiguration.getProject(), jrePath));
 
-		File[] files = bundleDir.listFiles(
-			new FileFilter() {
+		String bundleLocation = liferayServerConfiguration.getBundleLocation();
 
-				@Override
-				public boolean accept(File file) {
-					String fileName = file.getName();
+		String bundleType = liferayServerConfiguration.getBundleType();
 
-					return fileName.startsWith("tomcat");
+		PortalBundleFactory bundleFactory = ServerUtil.getPortalBundleFactory(bundleType);
+
+		Path bundlePath = bundleFactory.canCreateFromPath(Paths.get(bundleLocation));
+
+		if (bundlePath == null) {
+			throw new ExecutionException("Liferay bundle location is invalid.  " + bundleLocation);
+		}
+
+		final PortalBundle portalBundle = bundleFactory.create(bundlePath);
+
+		ParametersList programParametersList = javaParameters.getProgramParametersList();
+
+		String[] runtimeStartProgArgs = portalBundle.getRuntimeStartProgArgs();
+
+		Stream.of(
+			runtimeStartProgArgs
+		).forEach(
+			programParametersList::add
+		);
+
+		PathsList classPath = javaParameters.getClassPath();
+		Path[] runtimeClasspath = portalBundle.getRuntimeClasspath();
+
+		Stream.of(
+			runtimeClasspath
+		).map(
+			Path::toFile
+		).forEach(
+			classPath::add
+		);
+
+		javaParameters.setMainClass(portalBundle.getMainClass());
+
+		ParametersList vmParametersList = javaParameters.getVMParametersList();
+
+		String[] runtimeStartVMArgs = portalBundle.getRuntimeStartVMArgs();
+
+		Stream.of(
+			runtimeStartVMArgs
+		).forEach(
+			vmParametersList::add
+		);
+
+		setupJavaParameters(javaParameters);
+
+		try {
+			_configureDeveloperMode(liferayServerConfiguration);
+		}
+		catch (Exception e) {
+			throw new ExecutionException(e);
+		}
+
+		return javaParameters;
+	}
+
+	private void _configureDeveloperMode(LiferayServerConfiguration configuration) throws Exception {
+		String bundleLocation = configuration.getBundleLocation();
+
+		File portalExtPropertiesFile = new File(bundleLocation, "portal-ext.properties");
+
+		if (configuration.getDeveloperMode()) {
+			if (!portalExtPropertiesFile.exists()) {
+				portalExtPropertiesFile.createNewFile();
+			}
+
+			PortalPropertiesConfiguration portalPropertiesConfiguration = new PortalPropertiesConfiguration();
+
+			try (InputStream in = Files.newInputStream(portalExtPropertiesFile.toPath())) {
+				portalPropertiesConfiguration.load(in);
+			}
+
+			String[] p = portalPropertiesConfiguration.getStringArray("include-and-override");
+
+			boolean existing = false;
+
+			for (String prop : p) {
+				if (prop.equals("portal-developer.properties")) {
+					existing = true;
+
+					break;
 				}
+			}
 
-			});
+			if (!existing) {
+				portalPropertiesConfiguration.addProperty("include-and-override", "portal-developer.properties");
+			}
 
-		String tomcat = configuration.getLiferayBundle() + "/" + files[0].getName();
+			portalPropertiesConfiguration.save(portalExtPropertiesFile);
+		}
+		else if (portalExtPropertiesFile.exists()) {
+			String contents = FileUtil.readContents(portalExtPropertiesFile, true);
 
-		PathsList classPath = params.getClassPath();
+			contents = contents.replace("include-and-override=portal-developer.properties", "");
 
-		classPath.add(new File(tomcat + "/bin/tomcat-juli.jar"));
-		classPath.add(new File(tomcat + "/bin/bootstrap.jar"));
-		classPath.add(new File(tomcat + "/bin/commons-daemon.jar"));
-
-		params.setMainClass("org.apache.catalina.startup.Bootstrap");
-
-		ParametersList vmParametersList = params.getVMParametersList();
-
-		vmParametersList.addParametersString(configuration.getVMParameters());
-
-		vmParametersList.add("-Dcatalina.base=" + tomcat);
-		vmParametersList.add("-Dcatalina.home=" + tomcat);
-		vmParametersList.add("-Dcom.sun.management.jmxremote");
-		vmParametersList.add("-Dcom.sun.management.jmxremote.authenticate=false");
-		vmParametersList.add("-Dcom.sun.management.jmxremote.port=8099");
-		vmParametersList.add("-Dcom.sun.management.jmxremote.ssl=false");
-		vmParametersList.add("-Dfile.encoding=UTF8");
-		vmParametersList.add("-Djava.endorsed.dirs=" + tomcat + "/endorsed");
-		vmParametersList.add("-Djava.io.tmpdir=" + tomcat + "/temp");
-		vmParametersList.add("-Djava.net.preferIPv4Stack=true");
-		vmParametersList.add("-Djava.util.logging.config.file=" + tomcat + "/conf/logging.properties");
-		vmParametersList.add("-Djava.util.logging.manager=org.apache.juli.ClassLoaderLogManager");
-		vmParametersList.add("-Dorg.apache.catalina.loader.WebappClassLoader.ENABLE_CLEAR_REFERENCES=false");
-
-		setupJavaParameters(params);
-
-		return params;
+			FileUtils.write(portalExtPropertiesFile, contents);
+		}
 	}
 
 }

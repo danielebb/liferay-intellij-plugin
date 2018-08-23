@@ -14,24 +14,43 @@
 
 package com.liferay.ide.idea.ui.actions;
 
+import com.intellij.execution.ExecutionListener;
+import com.intellij.execution.ExecutionManager;
 import com.intellij.execution.RunManager;
 import com.intellij.execution.RunnerAndConfigurationSettings;
+import com.intellij.execution.configurations.RunConfiguration;
 import com.intellij.execution.executors.DefaultRunExecutor;
+import com.intellij.execution.process.ProcessHandler;
+import com.intellij.execution.runners.ExecutionEnvironment;
+import com.intellij.ide.projectView.ProjectView;
+import com.intellij.openapi.Disposable;
 import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.actionSystem.CommonDataKeys;
 import com.intellij.openapi.actionSystem.Presentation;
+import com.intellij.openapi.externalSystem.model.ProjectSystemId;
 import com.intellij.openapi.externalSystem.model.execution.ExternalSystemTaskExecutionSettings;
 import com.intellij.openapi.externalSystem.model.execution.ExternalTaskExecutionInfo;
+import com.intellij.openapi.externalSystem.service.execution.ExternalSystemRunConfiguration;
+import com.intellij.openapi.externalSystem.service.execution.ProgressExecutionMode;
 import com.intellij.openapi.externalSystem.service.notification.ExternalSystemNotificationManager;
 import com.intellij.openapi.externalSystem.service.notification.NotificationCategory;
 import com.intellij.openapi.externalSystem.service.notification.NotificationData;
 import com.intellij.openapi.externalSystem.service.notification.NotificationSource;
+import com.intellij.openapi.externalSystem.task.TaskCallback;
 import com.intellij.openapi.externalSystem.util.ExternalSystemUtil;
+import com.intellij.openapi.module.Module;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.roots.ModifiableRootModel;
+import com.intellij.openapi.roots.ModuleRootManager;
+import com.intellij.openapi.roots.ProjectFileIndex;
+import com.intellij.openapi.roots.ProjectRootManager;
+import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.util.execution.ParametersListUtil;
+import com.intellij.util.messages.MessageBus;
+import com.intellij.util.messages.MessageBusConnection;
 
 import com.liferay.ide.idea.util.CoreUtil;
 
@@ -52,6 +71,7 @@ import org.jetbrains.plugins.gradle.util.GradleConstants;
 
 /**
  * @author Andy Wu
+ * @author Simon Jiang
  */
 public abstract class AbstractLiferayGradleTaskAction extends AnAction {
 
@@ -64,23 +84,37 @@ public abstract class AbstractLiferayGradleTaskAction extends AnAction {
 	}
 
 	@Override
-	public void actionPerformed(AnActionEvent event) {
-		Project project = event.getRequiredData(CommonDataKeys.PROJECT);
+	public void actionPerformed(final AnActionEvent event) {
+		project = event.getRequiredData(CommonDataKeys.PROJECT);
 
-		String workingDirectory = getWorkingDirectory(event);
+		workingDirectory = getWorkingDirectory(event);
 
 		if (CoreUtil.isNullOrEmpty(workingDirectory)) {
 			return;
 		}
 
-		ExternalTaskExecutionInfo taskExecutionInfo = _buildTaskExecutionInfo(project, workingDirectory, _taskName);
+		final ExternalTaskExecutionInfo taskExecutionInfo = _buildTaskExecutionInfo(
+			project, workingDirectory, _taskName);
 
 		if (taskExecutionInfo == null) {
 			return;
 		}
 
 		ExternalSystemUtil.runTask(
-			taskExecutionInfo.getSettings(), taskExecutionInfo.getExecutorId(), project, GradleConstants.SYSTEM_ID);
+			taskExecutionInfo.getSettings(), taskExecutionInfo.getExecutorId(), project, GradleConstants.SYSTEM_ID,
+			new TaskCallback() {
+
+				@Override
+				public void onFailure() {
+				}
+
+				@Override
+				public void onSuccess() {
+					afterTask();
+				}
+
+			},
+			getProgressMode(), true);
 
 		RunnerAndConfigurationSettings configuration =
 			ExternalSystemUtil.createExternalSystemRunnerAndConfigurationSettings(
@@ -101,6 +135,47 @@ public abstract class AbstractLiferayGradleTaskAction extends AnAction {
 		else {
 			runManager.setSelectedConfiguration(existingConfiguration);
 		}
+
+		MessageBus messageBus = project.getMessageBus();
+
+		Disposable disposable = Disposer.newDisposable();
+
+		MessageBusConnection messageBusConnection = messageBus.connect(disposable);
+
+		messageBusConnection.subscribe(
+			ExecutionManager.EXECUTION_TOPIC,
+			new ExecutionListener() {
+
+				public void processStarted(
+					@NotNull final String executorIdLocal, @NotNull final ExecutionEnvironment environmentLocal,
+					@NotNull final ProcessHandler handler) {
+
+					if (!checkProcess(taskExecutionInfo, executorIdLocal, environmentLocal)) {
+						return;
+					}
+
+					handleProcessStarted(handler);
+				}
+
+				public void processTerminated(
+					@NotNull String executorIdLocal, @NotNull ExecutionEnvironment environmentLocal,
+					@NotNull ProcessHandler handler, int exitCode) {
+
+					if (!checkProcess(taskExecutionInfo, executorIdLocal, environmentLocal)) {
+						return;
+					}
+
+					handleProcessTerminated(handler);
+				}
+
+			});
+	}
+
+	public void afterTask() {
+	}
+
+	public boolean continuous() {
+		return false;
 	}
 
 	public boolean isEnabledAndVisible(AnActionEvent event) {
@@ -116,6 +191,46 @@ public abstract class AbstractLiferayGradleTaskAction extends AnAction {
 		eventPresentation.setEnabledAndVisible(isEnabledAndVisible(event));
 	}
 
+	protected boolean checkProcess(
+		ExternalTaskExecutionInfo taskExecutionInfo, @NotNull final String executorIdLocal,
+		@NotNull final ExecutionEnvironment environmentLocal) {
+
+		RunnerAndConfigurationSettings runAndConfigurationSettings =
+			environmentLocal.getRunnerAndConfigurationSettings();
+
+		RunConfiguration runConfiguration = runAndConfigurationSettings.getConfiguration();
+
+		if (runConfiguration instanceof ExternalSystemRunConfiguration) {
+			ExternalSystemRunConfiguration runnerExternalSystemRunConfiguration =
+				(ExternalSystemRunConfiguration)runAndConfigurationSettings.getConfiguration();
+
+			ExternalSystemTaskExecutionSettings runningTaskSettings =
+				runnerExternalSystemRunConfiguration.getSettings();
+
+			ExternalSystemTaskExecutionSettings taskRunnerSettings = taskExecutionInfo.getSettings();
+
+			String externalPath = taskRunnerSettings.getExternalProjectPath();
+			List<String> taskNames = taskRunnerSettings.getTaskNames();
+			ProjectSystemId externalSystemId = taskRunnerSettings.getExternalSystemId();
+
+			String executorId = taskExecutionInfo.getExecutorId();
+
+			if (externalPath.equals(runningTaskSettings.getExternalProjectPath()) &&
+				taskNames.equals(runningTaskSettings.getTaskNames()) &&
+				externalSystemId.equals(runningTaskSettings.getExternalSystemId()) &&
+				executorId.equals(executorIdLocal)) {
+
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	protected ProgressExecutionMode getProgressMode() {
+		return ProgressExecutionMode.IN_BACKGROUND_ASYNC;
+	}
+
 	protected VirtualFile getVirtualFile(AnActionEvent event) {
 		Object virtualFileObject = event.getData(CommonDataKeys.VIRTUAL_FILE);
 
@@ -126,7 +241,36 @@ public abstract class AbstractLiferayGradleTaskAction extends AnAction {
 		return null;
 	}
 
-	protected abstract String getWorkingDirectory(AnActionEvent event);
+	protected String getWorkingDirectory(AnActionEvent event) {
+		VirtualFile virtualFile = getVirtualFile(event);
+
+		ProjectRootManager projectRootManager = ProjectRootManager.getInstance(event.getProject());
+
+		ProjectFileIndex projectFileIndex = projectRootManager.getFileIndex();
+
+		Module module = projectFileIndex.getModuleForFile(virtualFile);
+
+		ModuleRootManager moduleRootManager = ModuleRootManager.getInstance(module);
+
+		ModifiableRootModel modifiableRootModel = moduleRootManager.getModifiableModel();
+
+		VirtualFile[] roots = modifiableRootModel.getContentRoots();
+
+		assert roots != null && roots[0] != null;
+
+		return roots[0].getCanonicalPath();
+	}
+
+	protected void handleProcessStarted(@NotNull ProcessHandler handler) {
+		_refreshProjectView();
+	}
+
+	protected void handleProcessTerminated(@NotNull ProcessHandler handler) {
+		_refreshProjectView();
+	}
+
+	protected Project project;
+	protected String workingDirectory;
 
 	private ExternalTaskExecutionInfo _buildTaskExecutionInfo(
 		Project project, @NotNull String projectPath, @NotNull String fullCommandLine) {
@@ -162,6 +306,10 @@ public abstract class AbstractLiferayGradleTaskAction extends AnAction {
 				},
 				" ");
 
+			if (continuous()) {
+				scriptParameters = scriptParameters + " --continuous";
+			}
+
 			ExternalSystemTaskExecutionSettings settings = new ExternalSystemTaskExecutionSettings();
 
 			settings.setExternalProjectPath(projectPath);
@@ -186,6 +334,12 @@ public abstract class AbstractLiferayGradleTaskAction extends AnAction {
 
 			return null;
 		}
+	}
+
+	private void _refreshProjectView() {
+		ProjectView projectView = ProjectView.getInstance(project);
+
+		projectView.refresh();
 	}
 
 	private final String _taskName;

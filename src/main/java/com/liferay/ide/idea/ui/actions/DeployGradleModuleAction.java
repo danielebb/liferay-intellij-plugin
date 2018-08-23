@@ -16,15 +16,14 @@ package com.liferay.ide.idea.ui.actions;
 
 import com.intellij.ide.projectView.impl.ProjectRootsUtil;
 import com.intellij.openapi.actionSystem.AnActionEvent;
-import com.intellij.openapi.module.Module;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.roots.ModifiableRootModel;
-import com.intellij.openapi.roots.ModuleRootManager;
-import com.intellij.openapi.roots.ProjectFileIndex;
-import com.intellij.openapi.roots.ProjectRootManager;
 import com.intellij.openapi.vfs.VirtualFile;
 
-import com.liferay.ide.idea.util.LiferayIcons;
+import com.liferay.ide.idea.util.LiferayWorkspaceUtil;
+
+import icons.LiferayIcons;
+
+import java.io.File;
 
 /**
  * @author Andy Wu
@@ -45,33 +44,12 @@ public class DeployGradleModuleAction extends AbstractLiferayGradleTaskAction {
 		VirtualFile gradleFile = baseDir.findChild("build.gradle");
 
 		if ((file != null) && (gradleFile != null) && ProjectRootsUtil.isModuleContentRoot(file, project) &&
-			!baseDir.equals(file)) {
+			!baseDir.equals(file) && new File(LiferayWorkspaceUtil.getHomeDir(project.getBasePath())).exists()) {
 
 			return true;
 		}
 
 		return false;
-	}
-
-	@Override
-	protected String getWorkingDirectory(AnActionEvent event) {
-		VirtualFile virtualFile = getVirtualFile(event);
-
-		ProjectRootManager projectRootManager = ProjectRootManager.getInstance(event.getProject());
-
-		ProjectFileIndex projectFileIndex = projectRootManager.getFileIndex();
-
-		Module module = projectFileIndex.getModuleForFile(virtualFile);
-
-		ModuleRootManager moduleRootManager = ModuleRootManager.getInstance(module);
-
-		ModifiableRootModel modifiableRootModel = moduleRootManager.getModifiableModel();
-
-		VirtualFile[] roots = modifiableRootModel.getContentRoots();
-
-		assert roots != null && roots[0] != null;
-
-		return roots[0].getCanonicalPath();
 	}
 
 }

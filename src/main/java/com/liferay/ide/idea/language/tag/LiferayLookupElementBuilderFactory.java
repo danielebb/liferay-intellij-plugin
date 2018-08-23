@@ -12,19 +12,25 @@
  * details.
  */
 
-package com.liferay.ide.idea.util;
+package com.liferay.ide.idea.language.tag;
 
-import com.intellij.openapi.util.IconLoader;
+import com.intellij.codeInsight.lookup.LookupElementBuilder;
 
-import javax.swing.Icon;
+import icons.LiferayIcons;
 
 /**
- * @author Joye Luo
+ * @author Terry Jia
  */
-public class LiferayIcons {
+public class LiferayLookupElementBuilderFactory {
 
-	public static final Icon BND_ICON = IconLoader.getIcon("/icons/bnd.png");
-
-	public static final Icon LIFERAY_ICON = IconLoader.getIcon("/icons/liferay.png");
+	public static LookupElementBuilder create(String value, String type) {
+		return LookupElementBuilder.create(
+			value
+		).withTypeText(
+			type
+		).withIcon(
+			LiferayIcons.LIFERAY_ICON
+		);
+	}
 
 }

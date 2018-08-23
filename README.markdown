@@ -1,5 +1,8 @@
 # Liferay IntelliJ Plugin
 
+## Install from jetbrains offical link
+https://plugins.jetbrains.com/plugin/10739-liferay-intellij-plugin
+
 ## Building from source
 If you would like to build from source, use this following command:
 
@@ -10,7 +13,7 @@ $ ./gradlew clean build
 Once it finishes the locally built the IntelliJ Idea Plugin will be located here:
 
 ```
-build/distributions/liferay-idea-plugin-<version>.zip
+build/distributions/liferay-intellij-plugin-<version>.zip
 ```
 
 You can install this using _Preferences > Plugins > Install plugin from disk... > Point to newly built zip file_
@@ -47,20 +50,26 @@ You must have one Liferay Workspace Project to do the following steps:
 5. Type *Project Name* and the *location* is not able to customize.
 6. Click *Finish* Button
 
-### Liferay Fragment Module
-You must have one Liferay Workspace Project and alreay get the *Liferay Server* to do the following steps:
-1. Right click on existing Liferay Workspace Project and choose *New* > *Liferay Module*
-2. Choose *Liferay Fragment Modules*
-3. Choose the osgi host and select the jsp files what you want to hook.
-4. Click *Next* Button
-5. Type *Project Name* and the *location* is not able to customize.
-6. Click *Finish* Button
-
 ### Deployment
 After you get the Liferay Modules you can deploy them to running or debugging Liferay Server:
 1. Right Click on your *Liferay Module*
 2. Choose Liferay > Deploy
 3. When you see the log showing in the console view, you get your module successful deploying
+
+### Watch
+After you get the Liferay Modules you can *watch* them on running or debugging Liferay Server:
+1. Right Click on your *Liferay Module* or the folders like modules or the root of Liferay Workspace.
+2. Choose Liferay > Watch
+3. When you see the gradle console output and the deplog log showing in the console view, you get your module successful deploying.
+4. You could keep the watch task running and it will listen on the changes of your coding.
+5. You could click red button to cancel the running watch task in Gradle Task view.
+
+### Better Editors for Liferay Files
+1. service.xml
+2. custom-sql/default.xml
+3. portlet-model-hints.xml
+4. Liferay Taglib Support for Jsp files(Ultimate Only)
+5. etc.
 
 ## License
 
